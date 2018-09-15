@@ -4,6 +4,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/go-units"
@@ -67,6 +68,7 @@ func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 			size, _ := units.RAMInBytes(val)
 			v.FsSize = uint64(size)
 		default:
+			return errors.Errorf("tmpsync: unknown option (%s = %s)", key, val)
 		}
 	}
 
@@ -138,7 +140,9 @@ func (d *tmpsyncDriver) Get(r *volume.GetRequest) (*volume.GetResponse, error) {
 
 	return &volume.GetResponse{
 		Volume: &volume.Volume{
-			Name: r.Name, Mountpoint: v.Mountpoint,
+			Name:       r.Name,
+			Mountpoint: v.Mountpoint,
+			CreatedAt:  time.Now().Format(time.RFC3339),
 		},
 	}, nil
 }
