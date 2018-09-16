@@ -105,7 +105,7 @@ func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
 	return nil
 }
 
-func (d *tmpsyncDriver) Load() error {
+func (d *tmpsyncDriver) loadConfig() error {
 	jsonpath := d.getConfigPath()
 
 	if jsondata, err := ioutil.ReadFile(jsonpath); err == nil {
@@ -119,7 +119,7 @@ func (d *tmpsyncDriver) Load() error {
 	return nil
 }
 
-func (d *tmpsyncDriver) Flush() error {
+func (d *tmpsyncDriver) flushConfig() error {
 	jsonpath := d.getConfigPath()
 
 	jsondata, err := json.Marshal(d)
@@ -182,7 +182,7 @@ func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 
 	d.Volumes[r.Name] = v
 
-	d.Flush()
+	d.flushConfig()
 
 	return nil
 }
@@ -204,7 +204,7 @@ func (d *tmpsyncDriver) Remove(r *volume.RemoveRequest) error {
 
 	delete(d.Volumes, r.Name)
 
-	d.Flush()
+	d.flushConfig()
 
 	return nil
 }
@@ -322,7 +322,7 @@ func NewTmpsyncDriver(options []string) (*tmpsyncDriver, error) {
 	}
 	d.options = *opts
 
-	d.Load()
+	d.loadConfig()
 
 	return d, nil
 }
