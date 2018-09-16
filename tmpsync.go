@@ -68,28 +68,28 @@ func (d *tmpsyncDriver) getMntPath(name string) string {
 	return path.Join(d.options.RootPath, name)
 }
 
-func (d *tmpsyncDriver) execRsyncCommand(target, source, opmode, sshkey string) error {
+func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
 	args := []string{}
 
-	if strings.Contains(opmode, "archive") {
+	if strings.Contains(v.OpMode, "archive") {
 		args = append(args, "--archive")
 	}
-	if strings.Contains(opmode, "compress") {
+	if strings.Contains(v.OpMode, "compress") {
 		args = append(args, "--compress")
 	}
-	if strings.Contains(opmode, "delete") {
+	if strings.Contains(v.OpMode, "delete") {
 		args = append(args, "--delete")
 	}
-	if strings.Contains(opmode, "recursive") {
+	if strings.Contains(v.OpMode, "recursive") {
 		args = append(args, "--recursive")
 	}
-	if sshkey != "" {
+	if v.SshKey != "" {
 		args = append(args, "-e")
-		args = append(args, fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -i %v", sshkey))
+		args = append(args, fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -i %v", v.SshKey))
 	}
 
-	args = append(args, source)
-	args = append(args, target)
+	args = append(args, v.Mountpoint)
+	args = append(args, v.Target)
 
 	if out, err := exec.Command("rsync", args...).CombinedOutput(); err != nil {
 		log.Println(string(out))
@@ -197,8 +197,8 @@ func (d *tmpsyncDriver) Unmount(r *volume.UnmountRequest) error {
 		return errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
 
-	if err := d.execRsyncCommand(v.Target, v.Mountpoint, v.OpMode, v.SshKey); err != nil {
-		return errors.Errorf("tmpsync: could not rsync tmpfs on %v", r.Name)
+	if err := d.syncVolume(v); err != nil {
+		return errors.Errorf("tmpsync: could not sync volume on %v", r.Name)
 	}
 
 	mount.RecursiveUnmount(v.Mountpoint)
