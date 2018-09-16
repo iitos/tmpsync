@@ -79,8 +79,8 @@ func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
 	}
 	if strings.Contains(v.OpMode, "delete") {
 		args = append(args, "--delete")
-	}
-	if strings.Contains(v.OpMode, "recursive") {
+		args = append(args, "--recursive")
+	} else if strings.Contains(v.OpMode, "recursive") {
 		args = append(args, "--recursive")
 	}
 	if v.SshKey != "" {
@@ -88,7 +88,7 @@ func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
 		args = append(args, fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -i %v", v.SshKey))
 	}
 
-	args = append(args, v.Mountpoint)
+	args = append(args, fmt.Sprintf("%v/", v.Mountpoint))
 	args = append(args, v.Target)
 
 	if out, err := exec.Command("rsync", args...).CombinedOutput(); err != nil {
