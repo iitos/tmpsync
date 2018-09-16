@@ -1,16 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/pkg/mount"
 	"github.com/docker/docker/pkg/parsers"
-	"github.com/docker/go-units"
 	"github.com/pkg/errors"
 
 	"github.com/docker/go-plugins-helpers/volume"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -21,10 +26,12 @@ type tmpsyncVolume struct {
 	Options []string
 
 	Mountpoint string
-	FsSize     uint64
+	Target     string
+	FsSize     string
 }
 
 type tmpsyncOptions struct {
+	RootPath string
 }
 
 type tmpsyncDriver struct {
@@ -44,12 +51,18 @@ func parseOptions(options []string) (*tmpsyncOptions, error) {
 		}
 		key = strings.ToLower(key)
 		switch key {
+		case "root":
+			opts.RootPath, _ = filepath.Abs(val)
 		default:
 			return nil, errors.Errorf("tmpsync: unknown option (%s = %s)", key, val)
 		}
 	}
 
 	return opts, nil
+}
+
+func (d *tmpsyncDriver) getMntPath(name string) string {
+	return path.Join(d.options.RootPath, name)
 }
 
 func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
@@ -59,14 +72,18 @@ func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 	defer d.Unlock()
 
 	v := &tmpsyncVolume{}
+	v.Mountpoint = d.getMntPath(r.Name)
+
+	if err := os.MkdirAll(v.Mountpoint, 0755); err != nil {
+		return err
+	}
 
 	for key, val := range r.Options {
 		switch key {
-		case "path":
-			v.Mountpoint = val
-		case "size":
-			size, _ := units.RAMInBytes(val)
-			v.FsSize = uint64(size)
+		case "target":
+			v.Target = val
+		case "fssize":
+			v.FsSize = val
 		default:
 			return errors.Errorf("tmpsync: unknown option (%s = %s)", key, val)
 		}
@@ -82,6 +99,15 @@ func (d *tmpsyncDriver) Remove(r *volume.RemoveRequest) error {
 
 	d.Lock()
 	defer d.Unlock()
+
+	v, ok := d.volumes[r.Name]
+	if !ok {
+		return errors.Errorf("tmpsync: volume %s not found", r.Name)
+	}
+
+	if err := os.RemoveAll(v.Mountpoint); err != nil {
+		return err
+	}
 
 	delete(d.volumes, r.Name)
 
@@ -113,6 +139,10 @@ func (d *tmpsyncDriver) Mount(r *volume.MountRequest) (*volume.MountResponse, er
 		return &volume.MountResponse{}, errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
 
+	if err := unix.Mount("tmpfs", v.Mountpoint, "tmpfs", 0, fmt.Sprintf("size=%v", v.FsSize)); err != nil {
+		return &volume.MountResponse{}, errors.Errorf("tmpsync: could not mount tmpfs on %v", r.Name)
+	}
+
 	return &volume.MountResponse{
 		Mountpoint: v.Mountpoint,
 	}, nil
@@ -123,6 +153,13 @@ func (d *tmpsyncDriver) Unmount(r *volume.UnmountRequest) error {
 
 	d.Lock()
 	defer d.Unlock()
+
+	v, ok := d.volumes[r.Name]
+	if !ok {
+		return errors.Errorf("tmpsync: volume %s not found", r.Name)
+	}
+
+	mount.RecursiveUnmount(v.Mountpoint)
 
 	return nil
 }

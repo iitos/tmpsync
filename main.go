@@ -15,9 +15,13 @@ const (
 )
 
 func main() {
+	var rootPath string
+
+	flag.StringVar(&rootPath, "root", ".", "root directory path for tmpsync")
 	flag.Parse()
 
 	options := []string{}
+	options = append(options, fmt.Sprintf("root=%s", rootPath))
 
 	d, err := NewTmpsyncDriver(options)
 	if err != nil {
