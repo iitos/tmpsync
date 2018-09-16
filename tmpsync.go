@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -72,37 +71,6 @@ func (d *tmpsyncDriver) getMntPath(name string) string {
 
 func (d *tmpsyncDriver) getConfigPath() string {
 	return path.Join(d.options.RootPath, configFile)
-}
-
-func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
-	args := []string{}
-
-	if strings.Contains(v.OpMode, "archive") {
-		args = append(args, "--archive")
-	}
-	if strings.Contains(v.OpMode, "compress") {
-		args = append(args, "--compress")
-	}
-	if strings.Contains(v.OpMode, "delete") {
-		args = append(args, "--delete")
-		args = append(args, "--recursive")
-	} else if strings.Contains(v.OpMode, "recursive") {
-		args = append(args, "--recursive")
-	}
-	if v.SshKey != "" {
-		args = append(args, "-e")
-		args = append(args, fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -i %v", v.SshKey))
-	}
-
-	args = append(args, fmt.Sprintf("%v/", v.Mountpoint))
-	args = append(args, v.Target)
-
-	if out, err := exec.Command("rsync", args...).CombinedOutput(); err != nil {
-		log.Println(string(out))
-		return err
-	}
-
-	return nil
 }
 
 func (d *tmpsyncDriver) loadConfig() error {
@@ -254,7 +222,7 @@ func (d *tmpsyncDriver) Unmount(r *volume.UnmountRequest) error {
 		return errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
 
-	if err := d.syncVolume(v); err != nil {
+	if err := syncDir(v.Mountpoint, v.Target, v.OpMode, v.SshKey); err != nil {
 		return errors.Errorf("tmpsync: could not sync volume on %v", r.Name)
 	}
 
