@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -26,8 +27,10 @@ type tmpsyncVolume struct {
 	Options []string
 
 	Mountpoint string
-	Target     string
 	FsSize     string
+	Target     string
+	OpMode     string
+	SshKey     string
 }
 
 type tmpsyncOptions struct {
@@ -65,6 +68,37 @@ func (d *tmpsyncDriver) getMntPath(name string) string {
 	return path.Join(d.options.RootPath, name)
 }
 
+func (d *tmpsyncDriver) execRsyncCommand(target, source, opmode, sshkey string) error {
+	args := []string{}
+
+	if strings.Contains(opmode, "archive") {
+		args = append(args, "--archive")
+	}
+	if strings.Contains(opmode, "compress") {
+		args = append(args, "--compress")
+	}
+	if strings.Contains(opmode, "delete") {
+		args = append(args, "--delete")
+	}
+	if strings.Contains(opmode, "recursive") {
+		args = append(args, "--recursive")
+	}
+	if sshkey != "" {
+		args = append(args, "-e")
+		args = append(args, fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -i %v", sshkey))
+	}
+
+	args = append(args, source)
+	args = append(args, target)
+
+	if out, err := exec.Command("rsync", args...).CombinedOutput(); err != nil {
+		log.Println(string(out))
+		return err
+	}
+
+	return nil
+}
+
 func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 	log.Printf("tmpsync: create (%v)\n", r)
 
@@ -80,10 +114,14 @@ func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 
 	for key, val := range r.Options {
 		switch key {
-		case "target":
-			v.Target = val
 		case "fssize":
 			v.FsSize = val
+		case "target":
+			v.Target = val
+		case "opmode":
+			v.OpMode = val
+		case "sshkey":
+			v.SshKey = val
 		default:
 			return errors.Errorf("tmpsync: unknown option (%s = %s)", key, val)
 		}
@@ -157,6 +195,10 @@ func (d *tmpsyncDriver) Unmount(r *volume.UnmountRequest) error {
 	v, ok := d.volumes[r.Name]
 	if !ok {
 		return errors.Errorf("tmpsync: volume %s not found", r.Name)
+	}
+
+	if err := d.execRsyncCommand(v.Target, v.Mountpoint, v.OpMode, v.SshKey); err != nil {
+		return errors.Errorf("tmpsync: could not rsync tmpfs on %v", r.Name)
 	}
 
 	mount.RecursiveUnmount(v.Mountpoint)
