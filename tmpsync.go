@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -21,16 +24,15 @@ import (
 
 const (
 	driverName = "tmpsync"
+	configFile = "tmpsync.json"
 )
 
 type tmpsyncVolume struct {
-	Options []string
-
-	Mountpoint string
-	FsSize     string
-	Target     string
-	OpMode     string
-	SshKey     string
+	Mountpoint string `json:"mountpoint"`
+	FsSize     string `json:"fssize"`
+	Target     string `json:"target"`
+	OpMode     string `json:"opmode"`
+	SshKey     string `json:"sshkey"`
 }
 
 type tmpsyncOptions struct {
@@ -42,7 +44,7 @@ type tmpsyncDriver struct {
 
 	sync.RWMutex
 
-	volumes map[string]*tmpsyncVolume
+	Volumes map[string]*tmpsyncVolume `json:"volumes"`
 }
 
 func parseOptions(options []string) (*tmpsyncOptions, error) {
@@ -66,6 +68,10 @@ func parseOptions(options []string) (*tmpsyncOptions, error) {
 
 func (d *tmpsyncDriver) getMntPath(name string) string {
 	return path.Join(d.options.RootPath, name)
+}
+
+func (d *tmpsyncDriver) getConfigPath() string {
+	return path.Join(d.options.RootPath, configFile)
 }
 
 func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
@@ -99,6 +105,53 @@ func (d *tmpsyncDriver) syncVolume(v *tmpsyncVolume) error {
 	return nil
 }
 
+func (d *tmpsyncDriver) Load() error {
+	jsonpath := d.getConfigPath()
+
+	if jsondata, err := ioutil.ReadFile(jsonpath); err == nil {
+		if err := json.Unmarshal(jsondata, &d); err != nil {
+			return errors.New("could not parse json config")
+		}
+
+		return nil
+	}
+
+	return nil
+}
+
+func (d *tmpsyncDriver) Flush() error {
+	jsonpath := d.getConfigPath()
+
+	jsondata, err := json.Marshal(d)
+	if err != nil {
+		return errors.New("could not encode json config")
+	}
+
+	tmpfile, err := ioutil.TempFile(filepath.Dir(jsonpath), ".tmp")
+	if err != nil {
+		return errors.New("could not create temp file for json config")
+	}
+
+	n, err := tmpfile.Write(jsondata)
+	if err != nil {
+		return errors.New("could not write json config to temp file")
+	}
+	if n < len(jsondata) {
+		return io.ErrShortWrite
+	}
+	if err := tmpfile.Sync(); err != nil {
+		return errors.New("could not sync temp file")
+	}
+	if err := tmpfile.Close(); err != nil {
+		return errors.New("could not close temp file")
+	}
+	if err := os.Rename(tmpfile.Name(), jsonpath); err != nil {
+		return errors.New("could not commit json config")
+	}
+
+	return nil
+}
+
 func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 	log.Printf("tmpsync: create (%v)\n", r)
 
@@ -127,7 +180,9 @@ func (d *tmpsyncDriver) Create(r *volume.CreateRequest) error {
 		}
 	}
 
-	d.volumes[r.Name] = v
+	d.Volumes[r.Name] = v
+
+	d.Flush()
 
 	return nil
 }
@@ -138,7 +193,7 @@ func (d *tmpsyncDriver) Remove(r *volume.RemoveRequest) error {
 	d.Lock()
 	defer d.Unlock()
 
-	v, ok := d.volumes[r.Name]
+	v, ok := d.Volumes[r.Name]
 	if !ok {
 		return errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
@@ -147,7 +202,9 @@ func (d *tmpsyncDriver) Remove(r *volume.RemoveRequest) error {
 		return err
 	}
 
-	delete(d.volumes, r.Name)
+	delete(d.Volumes, r.Name)
+
+	d.Flush()
 
 	return nil
 }
@@ -158,7 +215,7 @@ func (d *tmpsyncDriver) Path(r *volume.PathRequest) (*volume.PathResponse, error
 	d.RLock()
 	defer d.RUnlock()
 
-	v, ok := d.volumes[r.Name]
+	v, ok := d.Volumes[r.Name]
 	if !ok {
 		return &volume.PathResponse{}, errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
@@ -172,7 +229,7 @@ func (d *tmpsyncDriver) Mount(r *volume.MountRequest) (*volume.MountResponse, er
 	d.Lock()
 	defer d.Unlock()
 
-	v, ok := d.volumes[r.Name]
+	v, ok := d.Volumes[r.Name]
 	if !ok {
 		return &volume.MountResponse{}, errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
@@ -192,7 +249,7 @@ func (d *tmpsyncDriver) Unmount(r *volume.UnmountRequest) error {
 	d.Lock()
 	defer d.Unlock()
 
-	v, ok := d.volumes[r.Name]
+	v, ok := d.Volumes[r.Name]
 	if !ok {
 		return errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
@@ -212,7 +269,7 @@ func (d *tmpsyncDriver) Get(r *volume.GetRequest) (*volume.GetResponse, error) {
 	d.Lock()
 	defer d.Unlock()
 
-	v, ok := d.volumes[r.Name]
+	v, ok := d.Volumes[r.Name]
 	if !ok {
 		return &volume.GetResponse{}, errors.Errorf("tmpsync: volume %s not found", r.Name)
 	}
@@ -233,7 +290,7 @@ func (d *tmpsyncDriver) List() (*volume.ListResponse, error) {
 	defer d.Unlock()
 
 	var volumes []*volume.Volume
-	for name, v := range d.volumes {
+	for name, v := range d.Volumes {
 		volumes = append(volumes, &volume.Volume{Name: name, Mountpoint: v.Mountpoint})
 	}
 
@@ -261,9 +318,11 @@ func NewTmpsyncDriver(options []string) (*tmpsyncDriver, error) {
 	}
 
 	d := &tmpsyncDriver{
-		volumes: map[string]*tmpsyncVolume{},
+		Volumes: map[string]*tmpsyncVolume{},
 	}
 	d.options = *opts
+
+	d.Load()
 
 	return d, nil
 }
